@@ -250,6 +250,10 @@ def wall_key(wall: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, fl
     return tuple(sorted((a, b)))  # type: ignore[return-value]
 
 
+def is_generated_closure_wall(wall: dict[str, Any]) -> bool:
+    return wall.get("generated", {}).get("type") == "exterior_closure_wall"
+
+
 def compare_json_to_source_segmentation(
     data: dict[str, Any],
     source_data_path: str,
@@ -276,7 +280,15 @@ def compare_json_to_source_segmentation(
         end = exporter.normalize_point(line.coords[-1], bounds)
         expected.append(tuple(sorted((tuple(start), tuple(end)))))
 
-    actual = [wall_key(wall) for wall in data.get("walls", [])]
+    generated_closures = [
+        wall for wall in data.get("walls", [])
+        if is_generated_closure_wall(wall)
+    ]
+    actual = [
+        wall_key(wall)
+        for wall in data.get("walls", [])
+        if not is_generated_closure_wall(wall)
+    ]
     expected_set = set(expected)
     actual_set = set(actual)
     missing = sorted(expected_set - actual_set)
@@ -286,6 +298,7 @@ def compare_json_to_source_segmentation(
         "ok": not missing and not extra,
         "expected_segment_count": len(expected),
         "json_wall_count": len(actual),
+        "generated_closure_count": len(generated_closures),
         "missing_segments": missing,
         "extra_segments": extra,
     }
@@ -317,6 +330,7 @@ def validate_before_draw(
         "Segmentation comparison: "
         f"expected={report['expected_segment_count']} "
         f"json={report['json_wall_count']} "
+        f"generated_closures={report['generated_closure_count']} "
         f"missing={len(report['missing_segments'])} "
         f"extra={len(report['extra_segments'])}"
     )

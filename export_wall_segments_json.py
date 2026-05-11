@@ -596,11 +596,222 @@ def serialize_wall(
     }
 
 
+def is_generated_closure_wall(wall: Dict[str, Any]) -> bool:
+    return wall.get("generated", {}).get("type") == "exterior_closure_wall"
+
+
+def point_distance(a: List[float], b: List[float]) -> float:
+    return math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1]))
+
+
+def endpoint_cluster_key(point: List[float], tolerance: float) -> Tuple[int, int]:
+    return (
+        int(round(float(point[0]) / tolerance)),
+        int(round(float(point[1]) / tolerance)),
+    )
+
+
+def exterior_endpoint_closure_candidates(
+    dangling: List[Dict[str, Any]],
+    axis_tolerance: float,
+    max_gap: float,
+) -> List[Tuple[float, int, int, str]]:
+    candidates: List[Tuple[float, int, int, str]] = []
+
+    for i, a in enumerate(dangling):
+        for j in range(i + 1, len(dangling)):
+            b = dangling[j]
+            if a["wall_id"] == b["wall_id"]:
+                continue
+
+            dx = abs(float(a["point"][0]) - float(b["point"][0]))
+            dy = abs(float(a["point"][1]) - float(b["point"][1]))
+            distance = math.hypot(dx, dy)
+            if distance <= 1e-9 or distance > max_gap:
+                continue
+
+            if dx <= axis_tolerance:
+                axis = "vertical"
+            elif dy <= axis_tolerance:
+                axis = "horizontal"
+            else:
+                continue
+
+            candidates.append((distance, i, j, axis))
+
+    return sorted(candidates, key=lambda item: item[0])
+
+
+def add_exterior_closure_walls(
+    walls: List[Dict[str, Any]],
+    wall_depth: float,
+    bounds: Tuple[float, float, float, float, float],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    span = bounds[-1]
+    if span <= 0:
+        return walls, {"added_count": 0, "reason": "empty_bounds"}
+
+    wall_depth_ratio = wall_depth / span
+    node_tolerance = max(wall_depth_ratio * 0.05, 1e-5)
+    axis_tolerance = max(wall_depth_ratio * 0.50, 1e-4)
+    max_gap = min(max(wall_depth_ratio * 2.50, 0.015), 0.06)
+
+    endpoints: List[Dict[str, Any]] = []
+    for wall in walls:
+        if wall.get("physical", {}).get("wall_location") != "exterior":
+            continue
+        geometry = wall.get("geometry", {})
+        for endpoint_name in ("start", "end"):
+            point = geometry.get(endpoint_name)
+            if not point:
+                continue
+            endpoints.append(
+                {
+                    "wall_id": wall.get("wall_id"),
+                    "endpoint": endpoint_name,
+                    "point": [float(point[0]), float(point[1])],
+                }
+            )
+
+    clusters: Dict[Tuple[int, int], List[int]] = {}
+    for i, endpoint in enumerate(endpoints):
+        clusters.setdefault(endpoint_cluster_key(endpoint["point"], node_tolerance), []).append(i)
+
+    dangling = [
+        endpoints[indexes[0]]
+        for indexes in clusters.values()
+        if len(indexes) == 1
+    ]
+
+    candidates = exterior_endpoint_closure_candidates(
+        dangling,
+        axis_tolerance=axis_tolerance,
+        max_gap=max_gap,
+    )
+
+    used: set[int] = set()
+    closure_walls: List[Dict[str, Any]] = []
+
+    def add_closure_wall(
+        p0: List[float],
+        p1: List[float],
+        a: Dict[str, Any],
+        b: Dict[str, Any],
+        axis: str,
+        segment_index: int | None = None,
+    ) -> None:
+        if axis == "vertical":
+            x = round((p0[0] + p1[0]) / 2.0, 6)
+            p0 = [x, round(p0[1], 6)]
+            p1 = [x, round(p1[1], 6)]
+        elif axis == "horizontal":
+            y = round((p0[1] + p1[1]) / 2.0, 6)
+            p0 = [round(p0[0], 6), y]
+            p1 = [round(p1[0], 6), y]
+        else:
+            p0 = [round(p0[0], 6), round(p0[1], 6)]
+            p1 = [round(p1[0], 6), round(p1[1], 6)]
+
+        length_ratio = point_distance(p0, p1)
+        if length_ratio <= 1e-9:
+            return
+
+        angle_deg = 90.0 if abs(p0[0] - p1[0]) <= abs(p0[1] - p1[1]) else 0.0
+        closure_id = f"exterior_closure_{len(closure_walls):04d}"
+        closure_walls.append(
+            {
+                "wall_id": closure_id,
+                "geometry": {
+                    "start": p0,
+                    "end": p1,
+                    "length_ratio": round(length_ratio, 6),
+                    "angle_deg": angle_deg,
+                },
+                "physical": {
+                    "wall_location": "exterior",
+                    "thickness_mm": WALL_THICKNESS_MM["exterior"],
+                    "height_mm": WALL_HEIGHT_MM,
+                },
+                "room_membership": [],
+                "openings": [],
+                "quality_check": {
+                    "shared_by_multiple_rooms": False,
+                    "room_count": 0,
+                    "has_openings": False,
+                },
+                "generated": {
+                    "type": "exterior_closure_wall",
+                    "purpose": "slab_boundary_closure",
+                    "from": {
+                        "wall_id": a["wall_id"],
+                        "endpoint": a["endpoint"],
+                    },
+                    "to": {
+                        "wall_id": b["wall_id"],
+                        "endpoint": b["endpoint"],
+                    },
+                    "axis": axis,
+                    "max_gap_ratio": round(max_gap, 6),
+                    "axis_tolerance_ratio": round(axis_tolerance, 6),
+                    "segment_index": segment_index,
+                },
+            }
+        )
+
+    for _, i, j, axis in candidates:
+        if i in used or j in used:
+            continue
+
+        a = dangling[i]
+        b = dangling[j]
+        add_closure_wall(list(a["point"]), list(b["point"]), a, b, axis)
+        used.update([i, j])
+
+    remaining = [i for i in range(len(dangling)) if i not in used]
+    l_candidates: List[Tuple[float, int, int]] = []
+    for pos, i in enumerate(remaining):
+        a = dangling[i]
+        for j in remaining[pos + 1:]:
+            b = dangling[j]
+            if a["wall_id"] == b["wall_id"]:
+                continue
+            dx = abs(float(a["point"][0]) - float(b["point"][0]))
+            dy = abs(float(a["point"][1]) - float(b["point"][1]))
+            if dx <= max_gap and dy <= max_gap and dx + dy <= max_gap * 2.0:
+                l_candidates.append((math.hypot(dx, dy), i, j))
+
+    for _, i, j in sorted(l_candidates, key=lambda item: item[0]):
+        if i in used or j in used:
+            continue
+        a = dangling[i]
+        b = dangling[j]
+        p0 = list(a["point"])
+        p1 = list(b["point"])
+        corner = [round(p0[0], 6), round(p1[1], 6)]
+        add_closure_wall(p0, corner, a, b, "orthogonal_l", segment_index=0)
+        add_closure_wall(corner, p1, a, b, "orthogonal_l", segment_index=1)
+        used.update([i, j])
+
+    report = {
+        "enabled": True,
+        "source": "exterior_dangling_endpoint_pairing",
+        "exterior_endpoint_count": len(endpoints),
+        "dangling_endpoint_count_before": len(dangling),
+        "added_count": len(closure_walls),
+        "unpaired_dangling_endpoint_count": len(dangling) - len(used),
+        "max_gap_ratio": round(max_gap, 6),
+        "axis_tolerance_ratio": round(axis_tolerance, 6),
+    }
+
+    return walls + closure_walls, report
+
+
 def build_export_quality_check(
     plan: Dict[str, Any],
     segments: List[Dict[str, Any]],
     walls: List[Dict[str, Any]],
     bounds: Tuple[float, float, float, float, float],
+    exterior_closure_report: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     segmentation_report = ru.validate_wall_segmentation(
         plan,
@@ -634,6 +845,8 @@ def build_export_quality_check(
     json_nodes = []
     seen_json_nodes = set()
     for wall in walls:
+        if is_generated_closure_wall(wall):
+            continue
         geometry = wall.get("geometry", {})
         for key in ("start", "end"):
             if key not in geometry:
@@ -708,6 +921,7 @@ def build_export_quality_check(
             "extra_json_nodes": extra_json_nodes,
             "ok": not missing_json_nodes and not extra_json_nodes,
         },
+        "exterior_closure": exterior_closure_report or {"enabled": False},
     }
 
 
@@ -725,6 +939,11 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
         for seg in segments
     ]
     walls = [wall for wall in walls if wall]
+    walls, exterior_closure_report = add_exterior_closure_walls(
+        walls,
+        wall_depth=wall_depth,
+        bounds=bounds,
+    )
     openings_index = [
         {
             "opening_id": opening["opening_id"],
@@ -734,7 +953,13 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
         for wall in walls
         for opening in wall.get("openings", [])
     ]
-    quality_check = build_export_quality_check(plan, segments, walls, bounds)
+    quality_check = build_export_quality_check(
+        plan,
+        segments,
+        walls,
+        bounds,
+        exterior_closure_report=exterior_closure_report,
+    )
     if strict_validation and not quality_check["ok"]:
         raise ValueError(
             f"Export validation failed for plan {index}: "
