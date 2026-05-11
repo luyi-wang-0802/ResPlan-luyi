@@ -61,17 +61,17 @@ def _wall_params(plan: Dict[str, Any]) -> Dict[str, float]:
     return {
         "depth": d,
         "min_length": max(d * 0.30, 0.5),
-        "max_gap": max(d * 3.0, 8.0),
+        "max_gap": max(d * 4.0, 8.0),
         "max_opening_gap": max(d * 8.0, 20.0),
         "split_tolerance": max(d * 0.10, 0.15),
         "endpoint_snap": max(d * 1.25, 2.0),
         "offset_tolerance": max(d * 0.40, 1.0),
         "opening_gap_tolerance": max(d * 0.75, 1.0),
-        "opening_attach_distance": max(d * 1.50, 2.0),
+        "opening_attach_distance": max(d * 2.50, 2.0),
         "opening_attach_buffer": max(d * 0.90, 1.0),
         "connectivity_tolerance": max(d * 0.35, 1.0),
         "wall_support_tolerance": max(d * 0.35, 0.75),
-        "dangling_repair_distance": max(d * 2.5, 8.0),
+        "dangling_repair_distance": max(d * 3.5, 8.0),
         "wall_boundary_clearance": max(d * 0.22, 0.75),
         "axis_endpoint_alignment_tolerance": max(d * 0.50, 1.5),
     }
@@ -1853,9 +1853,11 @@ def split_wall_segments(
     keep_unpaired: bool = True,
     merge_collinear: bool = True,
     split_intersections: bool = True,
+    split_openings: bool = False,
     attach_openings: bool = True,
     annotate_connectivity: bool = True,
     repair_dangling_endpoints: bool = True,
+    filter_short_isolated_artifacts: bool = False,
 ) -> List[Dict[str, Any]]:
     plan = normalize_keys(plan)
     params = _wall_params(plan)
@@ -1892,13 +1894,14 @@ def split_wall_segments(
             preserve_opening_segments=False,
         )
 
-    segments = split_wall_segments_at_openings(
-        plan=plan,
-        segments=segments,
-        min_length=params["min_length"],
-        projection_tolerance=params["opening_gap_tolerance"],
-        min_opening_projection=max(wall_depth * 0.25, 0.75),
-    )
+    if split_openings:
+        segments = split_wall_segments_at_openings(
+            plan=plan,
+            segments=segments,
+            min_length=params["min_length"],
+            projection_tolerance=params["opening_gap_tolerance"],
+            min_opening_projection=max(wall_depth * 0.25, 0.75),
+        )
 
     if split_intersections:
         segments = split_wall_segments_at_intersections(
