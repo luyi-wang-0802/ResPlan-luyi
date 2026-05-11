@@ -388,35 +388,6 @@ def opening_axis_geometry(
     }
 
 
-def opening_host_span_geometry(
-    line: LineString,
-    start: float,
-    end: float,
-    bounds: Tuple[float, float, float, float, float],
-) -> Dict[str, Any] | None:
-    if line.length <= 0:
-        return None
-
-    line_len = float(line.length)
-    start = max(0.0, min(line_len, float(start)))
-    end = max(0.0, min(line_len, float(end)))
-    if end < start:
-        start, end = end, start
-
-    start_xy = point_at_axis_position(line, start)
-    end_xy = point_at_axis_position(line, end)
-    start_norm = normalize_point(start_xy, bounds)
-    end_norm = normalize_point(end_xy, bounds)
-    length_ratio = math.hypot(end_norm[0] - start_norm[0], end_norm[1] - start_norm[1])
-
-    return {
-        "start": start_norm,
-        "end": end_norm,
-        "length_ratio": round(length_ratio, 6),
-        "source": "host_wall_span",
-    }
-
-
 def opening_raw_axis_geometry(
     opening: Dict[str, Any],
     bounds: Tuple[float, float, float, float, float],
@@ -544,8 +515,7 @@ def serialize_opening(
     end_ratio = end / line.length if line.length > 0 else 0.0
     center_ratio = center / line.length if line.length > 0 else 0.0
     width_ratio = host_width / line.length if line.length > 0 else 0.0
-    opening_geometry = opening_host_span_geometry(line, start, end, bounds)
-    source_geometry = opening_raw_axis_geometry(opening, bounds)
+    opening_geometry = opening_raw_axis_geometry(opening, bounds)
 
     belongs_to_rooms = [room["room_id"] for room in room_membership]
     connects_rooms = belongs_to_rooms if opening_type in ("door", "front_door") else []
@@ -555,7 +525,6 @@ def serialize_opening(
         "opening_type": opening_type,
         "host_wall_id": opening.get("attached_wall_id"),
         "opening_geometry": opening_geometry,
-        "source_opening_geometry": source_geometry,
         "position_on_wall": {
             "start_ratio": round(start_ratio, 6),
             "end_ratio": round(end_ratio, 6),
