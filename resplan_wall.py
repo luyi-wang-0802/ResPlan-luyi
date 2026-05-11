@@ -93,6 +93,16 @@ def _opening_geometries(plan: Dict[str, Any]) -> List[Any]:
     return [g for g in geoms if g is not None and not g.is_empty]
 
 
+def _wall_centerline_geometry(plan: Dict[str, Any]) -> Optional[Any]:
+    parts = [
+        geom
+        for geom in get_geometries(plan.get("wall"))
+        if geom is not None and not geom.is_empty
+    ]
+    parts.extend(_opening_geometries(plan))
+    return unary_union(parts) if parts else None
+
+
 def _iter_openings(
     plan: Dict[str, Any],
     opening_keys: Iterable[str] = ("door", "window", "front_door"),
@@ -369,10 +379,15 @@ def split_wall_faces(
     split_tolerance: Optional[float] = None,
     wall_overlap_ratio: float = 0.20,
     use_wall_filter: bool = True,
+    use_openings_for_centerlines: bool = True,
 ) -> List[Dict[str, Any]]:
     plan = normalize_keys(plan)
     params = _wall_params(plan)
-    wall_geom = _wall_geometry(plan)
+    wall_geom = (
+        _wall_centerline_geometry(plan)
+        if use_openings_for_centerlines
+        else _wall_geometry(plan)
+    )
 
     if wall_geom is None:
         return []
@@ -1868,6 +1883,7 @@ def split_wall_segments(
         return []
 
     opening_geoms = _opening_geometries(plan)
+    centerline_support_geom = _wall_centerline_geometry(plan) or wall_geom
 
     if faces is None:
         faces = split_wall_faces(
@@ -1906,7 +1922,7 @@ def split_wall_segments(
     if split_intersections:
         segments = split_wall_segments_at_intersections(
             segments,
-            wall_geom=wall_geom,
+            wall_geom=centerline_support_geom,
             wall_depth=wall_depth,
             min_length=params["min_length"],
             tolerance=params["split_tolerance"],
@@ -1933,7 +1949,7 @@ def split_wall_segments(
     if repair_dangling_endpoints:
         segments = repair_dangling_wall_endpoints_to_perpendicular_centers(
             segments=segments,
-            wall_geom=wall_geom,
+            wall_geom=centerline_support_geom,
             wall_depth=wall_depth,
             endpoint_tolerance=params["connectivity_tolerance"],
             search_distance=params["dangling_repair_distance"],
@@ -1944,7 +1960,7 @@ def split_wall_segments(
 
     segments = align_axis_aligned_wall_endpoint_coordinates(
         segments=segments,
-        wall_geom=wall_geom,
+        wall_geom=centerline_support_geom,
         wall_depth=wall_depth,
         tolerance=params["axis_endpoint_alignment_tolerance"],
         angle_tolerance=angle_tolerance,
@@ -1956,7 +1972,7 @@ def split_wall_segments(
         for seg in segments
         if _line_supported_by_wall(
             _line_from_segment(seg),
-            wall_geom=wall_geom,
+            wall_geom=centerline_support_geom,
             wall_depth=wall_depth,
             min_overlap_ratio=0.42,
         )
