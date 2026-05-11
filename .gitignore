@@ -1,0 +1,4 @@
+assets/
+*.zip
+__pycache__/
+*.py[cod]
