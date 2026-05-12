@@ -238,10 +238,12 @@ def normalization_bounds(segments: List[Dict[str, Any]]) -> Tuple[float, float, 
 
 
 def normalize_point(xy: Any, bounds: Tuple[float, float, float, float, float]) -> List[float]:
-    min_x, min_y, _, _, span = bounds
+    min_x, min_y, max_x, max_y, span = bounds
+    center_x = (min_x + max_x) / 2.0
+    center_y = (min_y + max_y) / 2.0
     return [
-        round((float(xy[0]) - min_x) / span, 6),
-        round((float(xy[1]) - min_y) / span, 6),
+        round((float(xy[0]) - center_x) / span, 6),
+        round((float(xy[1]) - center_y) / span, 6),
     ]
 
 
@@ -894,11 +896,13 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
         },
         "coordinate_system": {
             "input_coordinates": "normalized",
-            "origin": "bottom_left",
+            "origin": "bbox_center",
             "x_axis": "right",
             "y_axis": "up",
-            "normalization_method": "bbox_uniform_scale",
+            "normalization_method": "bbox_centered_uniform_scale",
             "scale_to_mm": SCALE_TO_MM,
+            "normalized_center": [0.0, 0.0],
+            "normalized_extent": "max_dimension_fits_within_minus_0.5_to_0.5",
             "target_coordinate_system": {
                 "origin": "model_origin",
                 "x_axis": "right",

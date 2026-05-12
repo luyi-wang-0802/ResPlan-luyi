@@ -675,9 +675,14 @@ def draw_validation_overlay(
 
     segments = ru_segments_for_overlay(data, source_data_path)
     bounds = exporter.normalization_bounds(segments)
-    min_x, min_y, _, _, span = bounds
+    min_x, min_y, max_x, max_y, span = bounds
+    coord = data.get("coordinate_system", {})
+    center_x = (min_x + max_x) / 2.0
+    center_y = (min_y + max_y) / 2.0
 
     def denormalize(xy: tuple[float, float]) -> tuple[float, float]:
+        if coord.get("origin") == "bbox_center":
+            return center_x + xy[0] * span, center_y + xy[1] * span
         return min_x + xy[0] * span, min_y + xy[1] * span
 
     fig, ax = plt.subplots(figsize=(8, 8))
