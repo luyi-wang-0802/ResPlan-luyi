@@ -15,7 +15,6 @@ import pickle
 import random
 import zipfile
 import math
-from statistics import median
 from typing import Any, Dict, List, Tuple
 
 from shapely.geometry import LineString, Point
@@ -29,30 +28,6 @@ WALL_THICKNESS_MM = {
     "exterior": 300,
     "interior": 150,
     "unknown": 150,
-}
-OPENING_DEFAULTS = {
-    "door": {
-        "width_mm": 900,
-        "height_mm": 2100,
-        "sill_height_mm": 0,
-        "thickness_mode": "use_vectorworks_default",
-    },
-    "front_door": {
-        "width_mm": 1000,
-        "height_mm": 2100,
-        "sill_height_mm": 0,
-        "thickness_mode": "use_vectorworks_default",
-    },
-    "window": {
-        "height_mm": 1200,
-        "sill_height_mm": 900,
-        "thickness_mode": "use_vectorworks_default",
-    },
-    "opening": {
-        "height_mm": 2100,
-        "sill_height_mm": 0,
-        "thickness_mode": "use_vectorworks_default",
-    },
 }
 
 
@@ -287,32 +262,6 @@ def geometry_major_axis_width(geom: Any) -> float:
     return max(float(x1 - x0), float(y1 - y0))
 
 
-def width_to_mm(width: float, bounds: Tuple[float, float, float, float, float]) -> int:
-    return int(round((width / bounds[-1]) * SCALE_TO_MM))
-
-
-def plan_default_opening_widths(
-    plan: Dict[str, Any],
-    bounds: Tuple[float, float, float, float, float],
-) -> Dict[str, int]:
-    defaults = {
-        "door": int(OPENING_DEFAULTS["door"]["width_mm"]),
-        "front_door": int(OPENING_DEFAULTS["front_door"]["width_mm"]),
-    }
-
-    for opening_type in ("door", "front_door"):
-        widths = [
-            width_to_mm(geometry_major_axis_width(geom), bounds)
-            for geom in ru.get_geometries(plan.get(opening_type))
-            if geom is not None and not geom.is_empty
-        ]
-        widths = [width for width in widths if width > 0]
-        if widths:
-            defaults[opening_type] = int(round(median(widths)))
-
-    return defaults
-
-
 def opening_axis_width(opening: Dict[str, Any], line: LineString) -> float:
     interval = opening_axis_interval(opening, line)
     if interval is None:
@@ -472,10 +421,6 @@ def expand_interval_to_width(
     return max(0.0, start), min(line_length, end)
 
 
-def mm_to_data_units(width_mm: float, bounds: Tuple[float, float, float, float, float]) -> float:
-    return (float(width_mm) / SCALE_TO_MM) * bounds[-1]
-
-
 def normalized_opening_type(opening: Dict[str, Any]) -> str:
     return str(opening.get("type", "opening"))
 
@@ -483,28 +428,11 @@ def normalized_opening_type(opening: Dict[str, Any]) -> str:
 def serialize_opening(
     opening: Dict[str, Any],
     line: LineString,
-    line_length_ratio: float,
     bounds: Tuple[float, float, float, float, float],
     room_membership: List[Dict[str, Any]],
-    default_widths_mm: Dict[str, int],
 ) -> Dict[str, Any]:
     start, end, _ = opening_host_interval(opening, line)
     opening_type = normalized_opening_type(opening)
-
-    measured_width = opening_axis_width(opening, line)
-    width_for_mm = measured_width if measured_width > 0 else opening_axis_width(opening, line)
-    if width_for_mm <= 0:
-        raw_geom = opening_raw_axis_geometry(opening, bounds)
-        width_mm = int(default_widths_mm.get(opening_type, OPENING_DEFAULTS.get(opening_type, {}).get("width_mm", 0)))
-        if raw_geom is not None:
-            width_mm = int(round(raw_geom["length_ratio"] * SCALE_TO_MM))
-    else:
-        width_mm = width_to_mm(width_for_mm, bounds)
-
-    if opening_type in ("door", "front_door") and width_mm <= 0:
-        width_mm = int(default_widths_mm[opening_type])
-    if opening_type == "window" and width_mm <= 0:
-        width_mm = 1200
 
     center = (start + end) / 2.0
     host_width = end - start
@@ -514,6 +442,7 @@ def serialize_opening(
     center_ratio = center / line.length if line.length > 0 else 0.0
     width_ratio = host_width / line.length if line.length > 0 else 0.0
     opening_geometry = opening_raw_axis_geometry(opening, bounds)
+    insertion_point = normalize_point(point_at_axis_position(line, center), bounds)
 
     belongs_to_rooms = [room["room_id"] for room in room_membership]
     connects_rooms = belongs_to_rooms if opening_type in ("door", "front_door") else []
@@ -522,13 +451,13 @@ def serialize_opening(
         "opening_id": opening.get("id"),
         "opening_type": opening_type,
         "host_wall_id": opening.get("attached_wall_id"),
+        "insertion_point": insertion_point,
         "opening_geometry": opening_geometry,
         "position_on_wall": {
             "start_ratio": round(start_ratio, 6),
             "end_ratio": round(end_ratio, 6),
             "center_ratio": round(center_ratio, 6),
             "width_ratio": round(width_ratio, 6),
-            "width_mm": width_mm,
         },
         "semantic": {
             "connects_rooms": connects_rooms,
@@ -542,7 +471,6 @@ def serialize_wall(
     seg: Dict[str, Any],
     wall_depth: float,
     bounds: Tuple[float, float, float, float, float],
-    default_widths_mm: Dict[str, int],
 ) -> Dict[str, Any]:
     line = line_from_segment(seg)
     if line is None:
@@ -552,7 +480,7 @@ def serialize_wall(
     location = wall_location(plan, line, rooms, wall_depth)
     start, end, length_ratio = normalized_line(line, bounds)
     openings = [
-        serialize_opening(o, line, length_ratio, bounds, rooms, default_widths_mm)
+        serialize_opening(o, line, bounds, rooms)
         for o in seg.get("openings", [])
     ]
 
@@ -924,9 +852,8 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
     )
     wall_depth = float(plan.get("wall_depth") or plan.get("wall_width") or 6.0)
     bounds = normalization_bounds(segments)
-    default_widths_mm = plan_default_opening_widths(plan, bounds)
     walls = [
-        serialize_wall(plan, seg, wall_depth, bounds, default_widths_mm)
+        serialize_wall(plan, seg, wall_depth, bounds)
         for seg in segments
     ]
     walls = [wall for wall in walls if wall]
@@ -982,17 +909,6 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
         "defaults": {
             "wall_height_mm": WALL_HEIGHT_MM,
             "wall_thickness_mm": WALL_THICKNESS_MM,
-            "opening_defaults": {
-                **OPENING_DEFAULTS,
-                "door": {
-                    **OPENING_DEFAULTS["door"],
-                    "width_mm": default_widths_mm["door"],
-                },
-                "front_door": {
-                    **OPENING_DEFAULTS["front_door"],
-                    "width_mm": default_widths_mm["front_door"],
-                },
-            },
         },
         "rooms": collect_rooms(plan),
         "walls": walls,
