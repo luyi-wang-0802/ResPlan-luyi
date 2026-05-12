@@ -384,7 +384,6 @@ def opening_axis_geometry(
         "start": start,
         "end": end,
         "length_ratio": round(length_ratio, 6),
-        "source": "opening_polygon_axis_projection",
     }
 
 
@@ -419,7 +418,6 @@ def opening_raw_axis_geometry(
         "start": start,
         "end": end,
         "length_ratio": round(length_ratio, 6),
-        "source": "opening_polygon_major_axis",
     }
 
 
@@ -490,7 +488,7 @@ def serialize_opening(
     room_membership: List[Dict[str, Any]],
     default_widths_mm: Dict[str, int],
 ) -> Dict[str, Any]:
-    start, end, method = opening_host_interval(opening, line)
+    start, end, _ = opening_host_interval(opening, line)
     opening_type = normalized_opening_type(opening)
 
     measured_width = opening_axis_width(opening, line)
@@ -531,13 +529,6 @@ def serialize_opening(
             "center_ratio": round(center_ratio, 6),
             "width_ratio": round(width_ratio, 6),
             "width_mm": width_mm,
-            "host_span_policy": "cut_wall" if host_width > 0 else "endpoint_insert",
-            "measurement_method": method,
-        },
-        "vertical_rule": {
-            "height_source": "default",
-            "height_default_key": f"{opening_type}.height_mm",
-            "sill_height_default_key": f"{opening_type}.sill_height_mm",
         },
         "semantic": {
             "connects_rooms": connects_rooms,
