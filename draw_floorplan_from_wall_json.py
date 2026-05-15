@@ -32,6 +32,12 @@ OPENING_COLORS = {
     "opening": "#6a3d9a",
 }
 
+VISUAL_WALL_THICKNESS_MM = {
+    "exterior": 300,
+    "interior": 150,
+    "unknown": 150,
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -120,8 +126,13 @@ def wall_thickness_mm(wall: dict[str, Any], defaults: dict[str, Any]) -> float:
     if "physical" in wall and wall["physical"].get("thickness_mm") is not None:
         return float(wall["physical"]["thickness_mm"])
 
-    thickness_defaults = defaults.get("wall_thickness_mm", {})
-    return float(thickness_defaults.get(wall_location(wall), thickness_defaults.get("unknown", 150)))
+    thickness_defaults = defaults.get("wall_thickness_mm", VISUAL_WALL_THICKNESS_MM)
+    return float(
+        thickness_defaults.get(
+            wall_location(wall),
+            thickness_defaults.get("unknown", VISUAL_WALL_THICKNESS_MM["unknown"]),
+        )
+    )
 
 
 def opening_ratios(opening: dict[str, Any], host_len: float) -> tuple[float, float]:

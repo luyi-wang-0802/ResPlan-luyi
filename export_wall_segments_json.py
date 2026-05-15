@@ -23,12 +23,6 @@ import resplan_utils as ru
 
 
 SCALE_TO_MM = 10000
-WALL_HEIGHT_MM = 3000
-WALL_THICKNESS_MM = {
-    "exterior": 300,
-    "interior": 150,
-    "unknown": 150,
-}
 
 
 def load_plans(path: str) -> List[Dict[str, Any]]:
@@ -250,18 +244,10 @@ def normalize_point(xy: Any, bounds: Tuple[float, float, float, float, float]) -
 def normalized_line(
     line: LineString,
     bounds: Tuple[float, float, float, float, float],
-) -> Tuple[List[float], List[float], float]:
+) -> Tuple[List[float], List[float]]:
     start = normalize_point(line.coords[0], bounds)
     end = normalize_point(line.coords[-1], bounds)
-    length_ratio = math.hypot(end[0] - start[0], end[1] - start[1])
-    return start, end, round(length_ratio, 6)
-
-
-def geometry_major_axis_width(geom: Any) -> float:
-    if geom is None or geom.is_empty:
-        return 0.0
-    x0, y0, x1, y1 = geom.bounds
-    return max(float(x1 - x0), float(y1 - y0))
+    return start, end
 
 
 def opening_axis_width(opening: Dict[str, Any], line: LineString) -> float:
@@ -329,12 +315,10 @@ def opening_axis_geometry(
     end_xy = point_at_axis_position(line, end_pos)
     start = normalize_point(start_xy, bounds)
     end = normalize_point(end_xy, bounds)
-    length_ratio = math.hypot(end[0] - start[0], end[1] - start[1])
 
     return {
         "start": start,
         "end": end,
-        "length_ratio": round(length_ratio, 6),
     }
 
 
@@ -363,12 +347,10 @@ def opening_raw_axis_geometry(
 
     start = normalize_point(start_xy, bounds)
     end = normalize_point(end_xy, bounds)
-    length_ratio = math.hypot(end[0] - start[0], end[1] - start[1])
 
     return {
         "start": start,
         "end": end,
-        "length_ratio": round(length_ratio, 6),
     }
 
 
@@ -399,30 +381,6 @@ def opening_host_interval(opening: Dict[str, Any], line: LineString) -> Tuple[fl
     return start, end, "endpoint_gap"
 
 
-def expand_interval_to_width(
-    start: float,
-    end: float,
-    line_length: float,
-    width: float,
-) -> Tuple[float, float]:
-    if line_length <= 0 or width <= 0:
-        return start, end
-
-    width = min(width, line_length)
-    center = (start + end) / 2.0
-    start = center - width / 2.0
-    end = center + width / 2.0
-
-    if start < 0.0:
-        end -= start
-        start = 0.0
-    if end > line_length:
-        start -= end - line_length
-        end = line_length
-
-    return max(0.0, start), min(line_length, end)
-
-
 def normalized_opening_type(opening: Dict[str, Any]) -> str:
     return str(opening.get("type", "opening"))
 
@@ -437,12 +395,10 @@ def serialize_opening(
     opening_type = normalized_opening_type(opening)
 
     center = (start + end) / 2.0
-    host_width = end - start
 
     start_ratio = start / line.length if line.length > 0 else 0.0
     end_ratio = end / line.length if line.length > 0 else 0.0
     center_ratio = center / line.length if line.length > 0 else 0.0
-    width_ratio = host_width / line.length if line.length > 0 else 0.0
     opening_geometry = opening_raw_axis_geometry(opening, bounds)
     insertion_point = normalize_point(point_at_axis_position(line, center), bounds)
 
@@ -459,7 +415,6 @@ def serialize_opening(
             "start_ratio": round(start_ratio, 6),
             "end_ratio": round(end_ratio, 6),
             "center_ratio": round(center_ratio, 6),
-            "width_ratio": round(width_ratio, 6),
         },
         "semantic": {
             "connects_rooms": connects_rooms,
@@ -480,7 +435,7 @@ def serialize_wall(
 
     rooms = adjacent_rooms(plan, line, wall_depth)
     location = wall_location(plan, line, rooms, wall_depth)
-    start, end, length_ratio = normalized_line(line, bounds)
+    start, end = normalized_line(line, bounds)
     openings = [
         serialize_opening(o, line, bounds, rooms)
         for o in seg.get("openings", [])
@@ -491,13 +446,10 @@ def serialize_wall(
         "geometry": {
             "start": start,
             "end": end,
-            "length_ratio": length_ratio,
             "angle_deg": round(line_angle(line), 6),
         },
         "physical": {
             "wall_location": location,
-            "thickness_mm": WALL_THICKNESS_MM.get(location, WALL_THICKNESS_MM["unknown"]),
-            "height_mm": WALL_HEIGHT_MM,
         },
         "room_membership": [
             {
@@ -633,8 +585,7 @@ def add_exterior_closure_walls(
             p0 = [round(p0[0], 6), round(p0[1], 6)]
             p1 = [round(p1[0], 6), round(p1[1], 6)]
 
-        length_ratio = point_distance(p0, p1)
-        if length_ratio <= 1e-9:
+        if point_distance(p0, p1) <= 1e-9:
             return
 
         angle_deg = 90.0 if abs(p0[0] - p1[0]) <= abs(p0[1] - p1[1]) else 0.0
@@ -645,13 +596,10 @@ def add_exterior_closure_walls(
                 "geometry": {
                     "start": p0,
                     "end": p1,
-                    "length_ratio": round(length_ratio, 6),
                     "angle_deg": angle_deg,
                 },
                 "physical": {
                     "wall_location": "exterior",
-                    "thickness_mm": WALL_THICKNESS_MM["exterior"],
-                    "height_mm": WALL_HEIGHT_MM,
                 },
                 "room_membership": [],
                 "openings": [],
@@ -909,10 +857,6 @@ def export_one(plan: Dict[str, Any], index: int, out_dir: str, strict_validation
                 "y_axis": "up",
                 "z_axis": "up",
             },
-        },
-        "defaults": {
-            "wall_height_mm": WALL_HEIGHT_MM,
-            "wall_thickness_mm": WALL_THICKNESS_MM,
         },
         "rooms": collect_rooms(plan),
         "walls": walls,
