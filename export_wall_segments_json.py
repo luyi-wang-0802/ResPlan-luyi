@@ -389,7 +389,6 @@ def serialize_opening(
     opening: Dict[str, Any],
     line: LineString,
     bounds: Tuple[float, float, float, float, float],
-    room_membership: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     start, end, _ = opening_host_interval(opening, line)
     opening_type = normalized_opening_type(opening)
@@ -402,9 +401,6 @@ def serialize_opening(
     opening_geometry = opening_raw_axis_geometry(opening, bounds)
     insertion_point = normalize_point(point_at_axis_position(line, center), bounds)
 
-    belongs_to_rooms = [room["room_id"] for room in room_membership]
-    connects_rooms = belongs_to_rooms if opening_type in ("door", "front_door") else []
-
     return {
         "opening_id": opening.get("id"),
         "opening_type": opening_type,
@@ -415,10 +411,6 @@ def serialize_opening(
             "start_ratio": round(start_ratio, 6),
             "end_ratio": round(end_ratio, 6),
             "center_ratio": round(center_ratio, 6),
-        },
-        "semantic": {
-            "connects_rooms": connects_rooms,
-            "belongs_to_rooms": belongs_to_rooms,
         },
     }
 
@@ -437,7 +429,7 @@ def serialize_wall(
     location = wall_location(plan, line, rooms, wall_depth)
     start, end = normalized_line(line, bounds)
     openings = [
-        serialize_opening(o, line, bounds, rooms)
+        serialize_opening(o, line, bounds)
         for o in seg.get("openings", [])
     ]
 
